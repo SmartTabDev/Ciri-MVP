@@ -39,7 +39,7 @@ def ensure_full_logo_url(logo_url: Optional[str]) -> Optional[str]:
 @router.get("/", response_model=List[Company])
 def read_companies(
     db: Session = Depends(get_db),
-    skip: int = 0,
+    skip: int = 0, 
     limit: int = 100,
 ) -> Any:
     """
@@ -365,9 +365,9 @@ async def get_company_gmail_channels(
     db_company = company.get(db=db, id=id)
     if not db_company:
         raise HTTPException(status_code=404, detail="Company not found")
-    creds = gmail_monitor_service._get_credentials(db_company, db)
-    if not creds:
-        raise HTTPException(status_code=400, detail="No Gmail credentials configured for this company")
+    # creds = gmail_monitor_service._get_credentials(db_company, db)
+    # if not creds:
+    #     raise HTTPException(status_code=400, detail="No Gmail credentials configured for this company")
     try:
         # Fetch emails from database instead of Gmail API
         from sqlalchemy import func

@@ -213,11 +213,11 @@ export default function OnboardingPage() {
         setCurrentStep(4);
         setOutlookBoxTokens({ access_token, refresh_token: refresh_token || '' });
       }
-      if (onboarding_step === 'instagram') {
+      if (onboarding_step === 'instagram-box') {
         setCurrentStep(4);
         setInstagramTokens({ access_token, refresh_token: refresh_token || '' });
       }
-      if (onboarding_step === 'facebook') {
+      if (onboarding_step === 'facebook-box') {
         setCurrentStep(5);
         setFacebookTokens({ access_token, refresh_token: refresh_token || '' });
       }

@@ -129,6 +129,7 @@ class ChannelContextService:
                     synced_count += 1
             
             logger.info(f"Synced {synced_count} chat messages to channel context for company {company_id}")
+            logger.info(f"Synced {chat_messages} chat messages to channel context for company {company_id}")
             return synced_count
             
         except Exception as e:

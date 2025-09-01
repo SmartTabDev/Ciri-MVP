@@ -16,7 +16,7 @@ from app.schemas.instagram import (
     InstagramAuthCallback
 )
 
-router = APIRouter(prefix="/instagram", tags=["instagram"])
+router = APIRouter(prefix="", tags=["instagram"])
 
 @router.get("/auth-url", response_model=InstagramAuthResponse)
 async def get_instagram_auth_url(
@@ -61,7 +61,7 @@ async def instagram_auth_callback(
         # Handle Instagram Basic Display API callback
         token_data = await instagram_auth_service.exchange_instagram_code_for_token(auth_data.code)
         if not token_data:
-            raise HTTPException(status_code=400, detail="Failed to exchange Instagram code for token")
+            raise HTTPException(status_code=400, detail="Failed to exchange Instagram code for token",)
         
         # Get user info
         user_info = await instagram_auth_service.get_instagram_user_info(token_data.get('access_token'))

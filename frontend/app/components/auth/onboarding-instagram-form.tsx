@@ -15,6 +15,8 @@ export function OnboardingInstagramForm() {
   const handleInstagramConnect = async () => {
     setIsConnecting(true);
     try {
+      window.location.href = getApiUrl() + "/v1/auth/instagram/login?redirect_to=onboarding";
+
       // Get Instagram auth URL
       const response = await fetch(`${getApiUrl()}/v1/instagram/auth-url`, {
         headers: {

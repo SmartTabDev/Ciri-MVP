@@ -15,6 +15,7 @@ export function OnboardingFacebookForm() {
   const handleFacebookConnect = async () => {
     setIsConnecting(true);
     try {
+      window.location.href = getApiUrl() + "/v1/auth/facebook/login?redirect_to=onboarding";
       // Get Facebook auth URL
       const response = await fetch(`${getApiUrl()}/v1/facebook/auth-url`, {
         headers: {

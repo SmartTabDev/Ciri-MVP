@@ -17,7 +17,7 @@ from app.schemas.facebook import (
     FacebookPagesResponse
 )
 
-router = APIRouter(prefix="/facebook", tags=["facebook"])
+router = APIRouter(prefix="", tags=["facebook"])
 
 @router.get("/auth-url", response_model=FacebookAuthResponse)
 async def get_facebook_auth_url(
@@ -29,6 +29,7 @@ async def get_facebook_auth_url(
     """
     try:
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
+        print(company.id)
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
         
@@ -277,7 +278,7 @@ async def test_facebook_connection(
             raise HTTPException(status_code=400, detail="No Facebook account connected")
         
         # Test the connection by polling for messages
-        await facebook_monitor_service.poll_facebook_messages(company.id)
+        return {await facebook_monitor_service.poll_facebook_messages(company.id)}
         
         return {"message": "Facebook connection test completed successfully"}
         

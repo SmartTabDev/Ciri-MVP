@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from starlette.status import HTTP_400_BAD_REQUEST
 
 from app.api.deps import get_db, get_current_active_user
 from app.core.config import settings
@@ -23,6 +24,8 @@ import random
 import string
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from app.services.outlook_auth_service import outlook_auth_service
+from app.services.facebook_auth_service import facebook_auth_service
+from app.services.instagram_auth_service import instagram_auth_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -434,3 +437,170 @@ def outlook_callback(
         logger.error(f"Outlook callback error: {str(e)}", exc_info=True)
         error_message = f"Failed to connect Outlook: {str(e)}"
         return HTMLResponse(f"<script>window.close();</script><p>{error_message}</p><p>You may close this window.</p>")
+
+
+@router.get("/facebook/login")
+def facebook_login(redirect_to: str = "onboarding"):
+    # Create state with redirect information
+    state_data = {
+        "random": ''.join(random.choices(string.digits, k=12)),
+        "redirect_to": redirect_to
+    }
+    state = f"{state_data['random']}_{state_data['redirect_to']}"
+    
+    auth_url = facebook_auth_service.get_facebook_auth_url(state)
+    return RedirectResponse(auth_url)
+
+@router.get("/facebook/callback")
+async def facebook_callback(
+    code: str,
+    state: str | None = None,
+    db: Session = Depends(get_db),
+):
+    # This is still sync; ok to call directly. (Or you can wrap in run_sync too.)
+    tokens = await facebook_auth_service.exchange_facebook_code_for_token(code)
+    if not tokens or "access_token" not in tokens:
+        return JSONResponse(
+            {"error": "oauth_exchange_failed", "detail": "No access token from Facebook"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    access_token = tokens["access_token"]
+
+    # NOW we await the async function
+    userinfo = await facebook_auth_service.get_facebook_user_info(access_token)
+    if not userinfo:
+        return JSONResponse(
+            {"error": "user_info_failed", "detail": "Could not fetch user info from Facebook"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    email = userinfo.get("email", userinfo.get("userPrincipalName", "")) or ""
+    username = userinfo.get("name", "") or ""
+
+    # Get Facebook pages
+    pages_data = await facebook_auth_service.get_facebook_pages(access_token)
+    if not pages_data or not pages_data.get('data'):
+        raise HTTPException(status_code=400, detail="No Facebook pages found")
+    
+    page = pages_data['data'][0]
+    logging.info(f"User {username} is managing Facebook page: {page.get('name', '')} , Page Access Token: {page.get('access_token', '')}")
+    # state parsing
+    redirect_to = "onboarding"
+    if state:
+        try:
+            redirect_to = state.split("_")[-1] if "_" in state else state
+        except Exception:
+            pass
+
+    if redirect_to == "settings":
+        
+        redirect_url = (
+            f"{settings.FRONTEND_URL}/dashboard/pages/innstillinger/integrasjoner"
+            f"?onboarding_step=facebook-box"
+            f"&access_token={access_token}"
+            f"&refresh_token={tokens.get('access_token', '')}"
+            f"&facebook_address={email}"
+            f"&facebook_username={username}"
+            f"&facebook_page_id={page.get('id', '')}"
+            f"&facebook_page_name={page.get('name', '')}"
+            f"&page_access_token={page.get('access_token', '')}"
+            f"&facebook_user_id={userinfo.get('id', '')}"
+            f"&category={page.get('category', '')}"
+            f"&fan_count={page.get('fan_count', '')}"
+        )
+    else:
+        redirect_url = (
+            f"{settings.FRONTEND_URL}/onboarding"
+             f"?onboarding_step=facebook-box"
+           f"&access_token={access_token}"
+             f"&refresh_token={tokens.get('access_token', '')}"
+            f"&facebook_address={email}"
+            f"&facebook_username={username}"
+            f"&facebook_page_id={page.get('id', '')}"
+            f"&facebook_page_name={page.get('name', '')}"
+            f"&page_access_token={page.get('access_token', '')}"
+            f"&facebook_user_id={userinfo.get('id', '')}"
+            f"&category={page.get('category', '')}"
+            f"&fan_count={page.get('fan_count', '')}"
+
+        )
+
+    return RedirectResponse(redirect_url, status_code=302)
+
+
+
+@router.get("/instagram/login")
+def instagram_login(redirect_to: str = "onboarding"):
+    # Create state with redirect information
+    state_data = {
+        "random": ''.join(random.choices(string.digits, k=12)),
+        "redirect_to": redirect_to
+    }
+    state = f"{state_data['random']}_{state_data['redirect_to']}"
+    
+    auth_url = instagram_auth_service.get_instagram_auth_url(state)
+    return RedirectResponse(auth_url)
+
+@router.get("/instagram/callback")
+async def instagram_callback(
+    code: str,
+    state: str | None = None,
+    db: Session = Depends(get_db),
+):
+    # This is still sync; ok to call directly. (Or you can wrap in run_sync too.)
+    tokens = await instagram_auth_service.exchange_instagram_code_for_token(code)
+    if not tokens or "access_token" not in tokens:
+        return JSONResponse(
+            {"error": "oauth_exchange_failed", "detail": "No access token from instagram"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    access_token = tokens["access_token"]
+
+         # NOW we await the async function
+    userinfo = await instagram_auth_service.get_instagram_user_info(access_token)
+    if not userinfo:
+        return JSONResponse(
+            {"error": "user_info_failed", "detail": "Could not fetch user info from instagram"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    instagram_user_id = userinfo.get("id", userinfo.get("user_id", "")) or ""
+    instagram_username = userinfo.get("username", "") or ""
+    instagram_page_access_token = access_token
+
+    # Get instagram pages
+    
+    # state parsing
+    redirect_to = "onboarding"
+    if state:
+        try:
+            redirect_to = state.split("_")[-1] if "_" in state else state
+        except Exception:
+            pass
+
+    if redirect_to == "settings":
+        redirect_url = (
+            f"{settings.FRONTEND_URL}/dashboard/pages/innstillinger/integrasjoner"
+            f"?onboarding_step=instagram-box"
+            f"&access_token={access_token}"
+            f"&refresh_token={tokens.get('refresh_token', '')}"
+            f"&instagram_account_id={instagram_user_id}"
+            f"&instagram_username={instagram_username}"
+            f"&instagram_tokens={instagram_page_access_token}"
+        )
+    else:
+        redirect_url = (
+            f"{settings.FRONTEND_URL}/onboarding"
+            f"?access_token={access_token}"
+            f"&refresh_token={tokens.get('refresh_token', '')}"
+            f"&onboarding_step=instagram-box"
+            f"&instagram_account_id={instagram_user_id}"
+            f"&instagram_username={instagram_username}"
+            f"&instagram_tokens={instagram_page_access_token}"
+        )
+
+    return RedirectResponse(redirect_url, status_code=302)
+
+

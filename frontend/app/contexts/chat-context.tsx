@@ -126,7 +126,9 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     let wsHost = apiBase.replace(/^https?:\/\//, '');
     const wsUrl = `${wsProtocol}://${wsHost}/ws/company/${companyId}/email`;
     console.log("[DEBUG][ChatContext] Connecting to WebSocket:", wsUrl);
+    
     const socket = new window.WebSocket(wsUrl);
+    
     setWs(socket);
     socket.onopen = () => {
       console.log('[DEBUG][ChatContext] WebSocket connection opened:', wsUrl);

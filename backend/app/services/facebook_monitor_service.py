@@ -244,11 +244,12 @@ class FacebookMonitorService:
                 email_provider='facebook'
             )
 
+            
             db.add(chat)
             db.commit()
 
             # Broadcast new message via WebSocket
-            await broadcast_new_email(company.id, {
+            await broadcast_new_email(company_email_ws_clients,company.id, {
                 'type': 'new_facebook_message',
                 'message': {
                     'id': chat.id,
@@ -307,6 +308,48 @@ class FacebookMonitorService:
 
         except Exception as e:
             logger.error(f"Error polling Facebook messages for company {company_id}: {str(e)}")
+        finally:
+            db.close()
+
+    async def poll_facebook_messages_from_companies(self) -> None:
+        """Poll Facebook messages for a specific company."""
+        try:
+            db = SessionLocal()
+            companies = db.query(Company).filter(Company.facebook_box_credentials.isnot(None)).all()
+            
+            for company in companies:
+                company_id = company.id
+                credentials = self._get_credentials(company, db)
+                if not credentials:
+                    logger.warning(f"No Facebook credentials for company {company_id}")
+                    return
+
+                # Refresh token if needed
+                refreshed_credentials = await self._refresh_token_if_needed(credentials, company_id)
+                if not refreshed_credentials:
+                    logger.error(f"Could not refresh Facebook token for company {company_id}")
+                    return
+
+                # Get Facebook page ID
+                page_id = company.facebook_box_page_id
+                if not page_id:
+                    logger.warning(f"No Facebook page ID for company {company_id}")
+                    return
+
+                # Get messages and comments
+                messages = await self._get_facebook_messages(refreshed_credentials, page_id)
+                comments = await self._get_facebook_comments(refreshed_credentials, page_id)
+                
+                all_messages = messages + comments
+
+                # Process new messages
+                for message in all_messages:
+                    await self._process_facebook_message(message, company, db)
+
+                logger.info(f"Polled {len(all_messages)} Facebook messages for company {company_id}")
+
+        except Exception as e:
+            logger.error(f"Error polling Facebook messages for companies : {str(e)}")
         finally:
             db.close()
 

@@ -4,9 +4,10 @@ import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { OnboardingFacebookForm } from "@/components/auth/onboarding-facebook-form";
 import { Icons } from "@/components";
 import { Input } from "@/components/ui/input";
 import {
@@ -64,7 +65,64 @@ export default function Page() {
   };
 
   const integrationStatus = getIntegrationStatus();
+  const handleInstagramConnect = async () => {
+    try {
+      // Get Instagram auth URL
+      const response = await fetch(`${getApiUrl()}/v1/instagram/auth-url`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(typeof window !== "undefined" && localStorage.getItem("access_token")
+            ? { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+            : {}),
+        },
+      });
 
+      if (!response.ok) {
+        throw new Error("Failed to get Instagram auth URL");
+      }
+
+      const data = await response.json();
+
+      // Redirect to Instagram auth
+      window.location.href = data.instagram_auth_url;
+    } catch (error) {
+      console.error("Error connecting Instagram:", error);
+      // toast.error("Failed to connect Instagram", {
+      //   description: "Please try again later.",
+      // });
+    } finally {
+      // setIsConnecting(false);
+    }
+  };
+  const handleFacebookConnect = async () => {
+    try {
+      // Get Facebook auth URL
+      const response = await fetch(`${getApiUrl()}/v1/facebook/auth-url`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(typeof window !== "undefined" && localStorage.getItem("access_token")
+            ? { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+            : {}),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get Facebook auth URL");
+      }
+
+      const data = await response.json();
+
+      // Redirect to Facebook auth
+      window.location.href = data.facebook_auth_url;
+    } catch (error) {
+      console.error("Error connecting Facebook:", error);
+      // toast.error("Failed to connect Facebook", {
+      //   description: "Please try again later.",
+      // });
+    } finally {
+      // setIsConnecting(false);
+    }
+  };
   const form = useForm<NotificationsFormValues>({
     resolver: zodResolver(notificationsFormSchema),
     defaultValues: integrationStatus,
@@ -74,7 +132,7 @@ export default function Page() {
   useEffect(() => {
     const loadCompanyData = async () => {
       if (!user?.company_id) return;
-      
+
       setIsLoading(true);
       try {
         const data = await companyService.getCompany(user.company_id);
@@ -98,18 +156,19 @@ export default function Page() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const onboardingStep = urlParams.get('onboarding_step');
-    
+
     if (onboardingStep) {
+      debugger
       // Clear the URL parameters
       window.history.replaceState({}, document.title, window.location.pathname);
-      
+
       // Handle credential storage based on the integration
       const handleCredentialStorage = async () => {
         if (!user?.company_id) return;
-        
+
         try {
           const updateData: any = {};
-          
+
           switch (onboardingStep) {
             case 'calendar':
               // Store calendar credentials
@@ -124,7 +183,7 @@ export default function Page() {
                 };
               }
               break;
-              
+
             case 'gmail-box':
               // Store Gmail credentials
               const gmailAccessToken = urlParams.get('access_token');
@@ -132,7 +191,7 @@ export default function Page() {
               const gmailAddress = urlParams.get('gmail_address');
               const gmailUsername = urlParams.get('gmail_username');
               const gmailAppPassword = localStorage.getItem("onboarding_gmail_app_password");
-              
+
               if (gmailAccessToken && gmailRefreshToken) {
                 updateData.gmail_box_credentials = {
                   access_token: gmailAccessToken,
@@ -143,19 +202,19 @@ export default function Page() {
                 updateData.gmail_box_email = gmailAddress;
                 updateData.gmail_box_username = gmailUsername;
                 updateData.gmail_box_app_password = gmailAppPassword;
-                
+
                 // Clear the app password from localStorage
                 localStorage.removeItem("onboarding_gmail_app_password");
               }
               break;
-              
+
             case 'outlook-box':
               // Store Outlook credentials
               const outlookAccessToken = urlParams.get('access_token');
               const outlookRefreshToken = urlParams.get('refresh_token');
               const outlookAddress = urlParams.get('outlook_address');
               const outlookUsername = urlParams.get('outlook_username');
-              
+
               if (outlookAccessToken && outlookRefreshToken) {
                 updateData.outlook_box_credentials = {
                   access_token: outlookAccessToken,
@@ -168,15 +227,15 @@ export default function Page() {
               }
               break;
 
-            case 'instagram':
+            case 'instagram-box':
               // Store Instagram credentials
               const instagramAccessToken = urlParams.get('access_token');
               const instagramRefreshToken = urlParams.get('refresh_token');
               const instagramUsername = urlParams.get('instagram_username');
               const instagramAccountId = urlParams.get('instagram_account_id');
               const instagramPageId = urlParams.get('instagram_page_id');
-              
-              if (instagramAccessToken && instagramRefreshToken) {
+
+              if (instagramAccessToken ) {
                 updateData.instagram_credentials = {
                   access_token: instagramAccessToken,
                   refresh_token: instagramRefreshToken,
@@ -189,17 +248,23 @@ export default function Page() {
               }
               break;
 
-            case 'facebook':
+            case 'facebook-box':
               // Store Facebook credentials
               const facebookAccessToken = urlParams.get('access_token');
               const facebookRefreshToken = urlParams.get('refresh_token');
               const facebookPageId = urlParams.get('facebook_page_id');
               const facebookPageName = urlParams.get('facebook_page_name');
-              
-              if (facebookAccessToken && facebookRefreshToken) {
+
+              if (facebookAccessToken ) {
                 updateData.facebook_box_credentials = {
                   access_token: facebookAccessToken,
                   refresh_token: facebookRefreshToken,
+                  user_id: urlParams.get('facebook_user_id'),
+                  page_id: facebookPageId,
+                  page_name: facebookPageName,
+                  page_access_token: urlParams.get('page_access_token'),
+                  category: urlParams.get('category'),
+                  fan_count: urlParams.get('fan_count'),
                   token_type: 'Bearer',
                   expires_in: 3600
                 };
@@ -208,16 +273,16 @@ export default function Page() {
               }
               break;
           }
-          
+
           // Update company with credentials
           if (Object.keys(updateData).length > 0) {
             await companyService.updateCompany(user.company_id, updateData);
-            
+
             // Reload company data
             const data = await companyService.getCompany(user.company_id);
             setCompanyData(data);
           }
-          
+
           // Show success message
           let integrationName = '';
           switch (onboardingStep) {
@@ -230,21 +295,21 @@ export default function Page() {
             case 'outlook-box':
               integrationName = 'Outlook';
               break;
-            case 'instagram':
+            case 'instagram-box':
               integrationName = 'Instagram';
               break;
-            case 'facebook':
+            case 'facebook-box':
               integrationName = 'Facebook';
               break;
           }
-          
+
           if (integrationName) {
             toast({
               title: "Success",
               description: `${integrationName} koblet til!`,
             });
           }
-          
+
         } catch (error) {
           console.error("Error storing credentials:", error);
           toast({
@@ -254,10 +319,48 @@ export default function Page() {
           });
         }
       };
-      
+
       handleCredentialStorage();
     }
+
   }, [user?.company_id]);
+
+
+  useEffect(() => {
+    handleOAuthRedirect();
+  }, []);
+
+  async function handleOAuthRedirect() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const platform = urlParams.get('platform');
+    if (code) {
+      // Exchange code for access token
+      const response = await fetch(`${getApiUrl()}/v1/${platform}/auth/callback`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem("access_token") || ""}`
+        },
+        method: "POST",
+        body: JSON.stringify({ code })
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: data.message,
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: data.message || `${platform} integration failed.`,
+          variant: "destructive",
+        });
+      }
+      // Handle the OAuth redirect and exchange the code for tokens
+    }
+  }
 
   // Update form when company data changes
   useEffect(() => {
@@ -270,7 +373,7 @@ export default function Page() {
   // Handle integration connections
   const handleConnect = (integration: string) => {
     setIsConnecting(integration);
-    
+
     switch (integration) {
       case 'google_calendar':
         window.location.href = getApiUrl() + "/v1/auth/calendar/login?redirect_to=settings";
@@ -286,10 +389,14 @@ export default function Page() {
         window.location.href = getApiUrl() + "/v1/auth/outlook/login?redirect_to=settings";
         break;
       case 'instagram':
-        window.location.href = getApiUrl() + "/v1/instagram/auth-url";
+        // handleInstagramConnect()
+        window.location.href = getApiUrl() + "/v1/auth/instagram/login?redirect_to=settings";
+
         break;
       case 'facebook':
-        window.location.href = getApiUrl() + "/v1/facebook/auth-url";
+        window.location.href = getApiUrl() + "/v1/auth/facebook/login?redirect_to=settings";
+
+        // handleFacebookConnect()
         break;
       default:
         setIsConnecting(null);
@@ -301,10 +408,10 @@ export default function Page() {
     if (!user?.company_id) return;
 
     setIsConnecting(integration);
-    
+
     try {
       const updateData: any = {};
-      
+
       switch (integration) {
         case 'google_calendar':
           updateData.calendar_credentials = null;
@@ -333,11 +440,11 @@ export default function Page() {
       }
 
       await companyService.updateCompany(user.company_id, updateData);
-      
+
       // Reload company data
       const data = await companyService.getCompany(user.company_id);
       setCompanyData(data);
-      
+
       toast({
         title: "Success",
         description: `${integration.replace('_', ' ')} koblet fra`,
@@ -413,7 +520,7 @@ export default function Page() {
                               </Button>
                             </div>
                           ) : (
-                            <Button 
+                            <Button
                               className="dark:text-white"
                               onClick={() => handleConnect('google_calendar')}
                               disabled={isConnecting === 'google_calendar'}
@@ -467,7 +574,7 @@ export default function Page() {
                                 onChange={(e) => setGmailAppPassword(e.target.value)}
                                 className="w-64"
                               />
-                              <Button 
+                              <Button
                                 className="dark:text-white"
                                 onClick={() => handleConnect('google_email')}
                                 disabled={isConnecting === 'google_email' || !gmailAppPassword}
@@ -514,7 +621,7 @@ export default function Page() {
                               </Button>
                             </div>
                           ) : (
-                            <Button 
+                            <Button
                               className="dark:text-white"
                               onClick={() => handleConnect('outlook_email')}
                               disabled={isConnecting === 'outlook_email'}
@@ -560,7 +667,7 @@ export default function Page() {
                               </Button>
                             </div>
                           ) : (
-                            <Button 
+                            <Button
                               className="dark:text-white"
                               onClick={() => handleConnect('instagram')}
                               disabled={isConnecting === 'instagram'}
@@ -606,7 +713,7 @@ export default function Page() {
                               </Button>
                             </div>
                           ) : (
-                            <Button 
+                            <Button
                               className="dark:text-white"
                               onClick={() => handleConnect('facebook')}
                               disabled={isConnecting === 'facebook'}

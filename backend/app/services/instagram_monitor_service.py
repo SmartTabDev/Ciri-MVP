@@ -4,7 +4,6 @@ import requests
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from pathlib import Path
 import json
 import sys
 
@@ -16,170 +15,157 @@ from app.core.ws_clients import company_email_ws_clients
 from app.core.broadcast import broadcast_new_email
 from app.services.ai_service import SimpleAIService, filter_email_with_ai
 from app.models.chat import Chat
-from app.crud.crud_channel_auto_reply_settings import channel_auto_reply_settings
-from app.services.channel_context_service import channel_context_service
-from app.services.instagram_auth_service import instagram_auth_service
-
+from app.services.instagram_auth_service import instagram_auth_service 
 logger = logging.getLogger(__name__)
 
+GRAPH = "https://graph.instagram.com/v23.0"
+
+
 def should_reply_to_instagram_message(sender: str, content: str, settings, company_instagram_username: str = None) -> bool:
-    """
-    Check if an Instagram message should be replied to based on filtering criteria.
-    
-    Args:
-        sender: Instagram username
-        content: Message content
-        settings: Application settings
-        company_instagram_username: Company's Instagram username
-    
-    Returns:
-        bool: True if message should be replied to, False otherwise
-    """
-    # Don't reply if message content contains spam indicators
-    if any(spam_word in content.lower() for spam_word in ['buy', 'sell', 'promote', 'advertisement', 'spam']):
+    # Basic filter; keep as-is from your original code
+    if any(w in (content or "").lower() for w in ['buy', 'sell', 'promote', 'advertisement', 'spam']):
         return False
-    
-    # Don't reply if sender is the company's own Instagram account
-    if company_instagram_username and company_instagram_username.lower() == sender.lower():
+    if company_instagram_username and sender and company_instagram_username.lower() == sender.lower():
         return False
-    
-    # Don't reply to empty messages
-    if not content or not content.strip():
-        return False
-    
-    return True
+    return bool(content and content.strip())
+
 
 class InstagramMonitorService:
     def __init__(self):
-        self.last_seen_comment_ids = {}  # company_id -> last seen Instagram comment ID
+        # if you later de-dupe by conversation, keep a map here
+        self.last_seen_message_ids: Dict[int, str] = {}  # company_id -> last seen message id
 
     def _get_credentials(self, company: Company, db: Session = None) -> Optional[Dict[str, Any]]:
-        """Get Instagram credentials for a company."""
         if not company.instagram_credentials:
             logger.warning(f"No Instagram credentials found for company {company.id}")
             return None
-        
         try:
-            credentials = json.loads(company.instagram_credentials) if isinstance(company.instagram_credentials, str) else company.instagram_credentials
-            return credentials
+            return json.loads(company.instagram_credentials) if isinstance(company.instagram_credentials, str) else company.instagram_credentials
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Error parsing Instagram credentials for company {company.id}: {str(e)}")
+            logger.error(f"Error parsing Instagram credentials for company {company.id}: {e}")
             return None
 
     async def _refresh_token_if_needed(self, credentials: Dict[str, Any], company_id: int) -> Optional[Dict[str, Any]]:
-        """Refresh Instagram token if it's expired or about to expire."""
+        """
+        IG Login uses a **long-lived token** (≈60 days) that you refresh with
+        GET /refresh_access_token?grant_type=ig_refresh_token&access_token=<long_token>.
+        No separate refresh_token is issued.
+        """
         try:
             expires_at = credentials.get('expires_at')
             if expires_at:
                 expires_datetime = datetime.fromtimestamp(expires_at, tz=timezone.utc)
-                # Refresh if token expires in less than 1 hour
                 if expires_datetime - datetime.now(timezone.utc) < timedelta(hours=1):
                     logger.info(f"Refreshing Instagram token for company {company_id}")
-                    
-                    if credentials.get('refresh_token'):
-                        new_token_data = await instagram_auth_service.refresh_instagram_token(
-                            credentials['refresh_token']
-                        )
-                        if new_token_data:
-                            # Update credentials in database
-                            db = SessionLocal()
-                            try:
-                                company = db.query(Company).filter(Company.id == company_id).first()
-                                if company:
-                                    updated_credentials = {
-                                        **credentials,
-                                        'access_token': new_token_data.get('access_token'),
-                                        'expires_at': new_token_data.get('expires_at', expires_at)
-                                    }
-                                    company.instagram_credentials = updated_credentials
-                                    db.commit()
-                                    logger.info(f"Updated Instagram credentials for company {company_id}")
-                                    return updated_credentials
-                            finally:
-                                db.close()
-                    
+                    new_token_data = await instagram_auth_service.refresh_instagram_token(credentials.get('access_token'))
+                    if new_token_data and new_token_data.get('access_token'):
+                        db = SessionLocal()
+                        try:
+                            company = db.query(Company).filter(Company.id == company_id).first()
+                            if company:
+                                updated = {**credentials,
+                                           'access_token': new_token_data['access_token'],
+                                           # if your auth service returns absolute expiry, persist it; else keep old
+                                           'expires_at': new_token_data.get('expires_at', expires_at)}
+                                company.instagram_credentials = updated
+                                db.commit()
+                                logger.info(f"Updated Instagram credentials for company {company_id}")
+                                return updated
+                        finally:
+                            db.close()
                     logger.warning(f"Could not refresh Instagram token for company {company_id}")
                     return None
-            
             return credentials
-            
         except Exception as e:
-            logger.error(f"Error refreshing Instagram token for company {company_id}: {str(e)}")
+            logger.error(f"Error refreshing Instagram token for company {company_id}: {e}")
             return None
 
-    async def get_instagram_messages(self, credentials: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-        """Get Instagram comments for the authenticated user's media."""
+    # ---------- NEW: conversations instead of comments ----------
+    async def get_instagram_conversations(self, credentials: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Fetch **DM conversations** + messages using Instagram Login (graph.instagram.com).
+        - 1) Resolve IG user id via /me
+        - 2) GET /{IG_ID}/conversations
+        - 3) For each conversation, GET messages via fields=messages{...}
+        Returns a flat list of message dicts (conversation-aware).
+        """
+        access_token = credentials.get('access_token')
+        if not access_token:
+            logger.error("No access token found in Instagram credentials")
+            return []
+
         try:
-            access_token = credentials.get('access_token')
-            if not access_token:
-                logger.error("No access token found in Instagram credentials")
-                return []
-
-            # Get user's media with comments
-            url = "https://graph.instagram.com/me/media"
-            params = {
-                "fields": "id,caption,comments{id,text,from,created_time},timestamp",
+          
+            # 2) List conversations
+            conv_res = requests.get(f"{GRAPH}/me/conversations", params={
                 "access_token": access_token,
-                "limit": limit
-            }
+                "limit": max(1, min(50, limit))
+            })
+            conv_res.raise_for_status()
+            conversations = conv_res.json().get("data", [])
 
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            
-            media_data = response.json()
-            messages = []
-            
-            for media in media_data.get('data', []):
-                media_id = media.get('id')
-                comments = media.get('comments', {}).get('data', [])
-                
-                for comment in comments:
+            messages: List[Dict[str, Any]] = []
+
+            # 3) Load messages for each conversation
+            for conv in conversations:
+                conv_id = conv.get("id")
+                if not conv_id:
+                    continue
+
+                # You can use the Graph Conversation node to pull messages
+                # Either /{conversation_id}/messages or ?fields=messages{...}
+                detail = requests.get(f"{GRAPH}/{conv_id}", params={
+                    "fields": "updated_time,participants,messages.limit(50){id,from,to,created_time,message,attachments}",
+                    "access_token": access_token
+                })
+                if not detail.ok:
+                    logger.warning("Failed to fetch conversation %s: %s", conv_id, detail.text)
+                    continue
+                detail_json = detail.json()
+                msgs = (detail_json.get("messages") or {}).get("data", [])
+
+                for m in msgs:
+                    text = m.get("message") or m.get("text") or ""
+                    sender = (m.get("from") or {}).get("username") or (m.get("from") or {}).get("id")
                     messages.append({
-                        'id': comment.get('id'),
-                        'text': comment.get('text'),
-                        'from': comment.get('from', {}).get('username'),
-                        'from_id': comment.get('from', {}).get('id'),
-                        'created_time': comment.get('created_time'),
-                        'media_id': media_id,
-                        'media_caption': media.get('caption'),
-                        'type': 'comment'
+                        "id": m.get("id"),
+                        "text": text,
+                        "from": sender,
+                        "from_id": (m.get("from") or {}).get("id"),
+                        "created_time": m.get("created_time"),
+                        "conversation_id": conv_id,
+                        "type": "dm"
                     })
-            
+
             return messages
-            
+
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error getting Instagram messages: {str(e)}")
+            logger.error(f"Error getting Instagram conversations: {e}")
             return []
 
     async def _process_instagram_message(self, message: Dict[str, Any], company: Company, db: Session) -> None:
-        """Process a single Instagram message and save to database."""
         try:
             message_id = message.get('id')
             if not message_id:
                 return
 
-            # Check if message already exists
             existing_chat = db.query(Chat).filter(
                 Chat.message_id == message_id,
                 Chat.company_id == company.id
             ).first()
-            
             if existing_chat:
                 return
 
-            # Check if we should reply to this message
             if not should_reply_to_instagram_message(message.get('from'), message.get('text', ''), settings, company.instagram_username):
                 return
 
-            # Filter message using AI
             sender = message.get('from', 'Unknown')
             content = message.get('text', '')
-            
+
             if not await filter_email_with_ai(sender, content):
-                logger.info(f"Instagram message filtered out by AI: {message_id}")
+                logger.info(f"Instagram DM filtered out by AI: {message_id}")
                 return
 
-            # Analyze message for action requirement
             ai_service = SimpleAIService()
             action_analysis = await ai_service.analyze_message_for_action_requirement(
                 sender=sender,
@@ -189,7 +175,6 @@ class InstagramMonitorService:
                 company_id=company.id
             )
 
-            # Create chat record
             created_time = message.get('created_time')
             if created_time:
                 try:
@@ -201,11 +186,11 @@ class InstagramMonitorService:
 
             chat = Chat(
                 company_id=company.id,
-                channel_id=message.get('media_id', 'instagram'),
+                channel_id=message.get('conversation_id', 'instagram'),
                 message_id=message_id,
                 from_email=sender,
                 to_email=company.instagram_username or '',
-                subject=f"Instagram comment",
+                subject="Instagram DM",
                 body_text=content,
                 body_html=content,
                 sent_at=sent_at,
@@ -222,31 +207,30 @@ class InstagramMonitorService:
             db.add(chat)
             db.commit()
 
-            # Broadcast new message via WebSocket
-            await broadcast_new_email(company.id, {
+            await broadcast_new_email(company_email_ws_clients, company.id, {
                 'type': 'new_instagram_message',
                 'message': {
                     'id': chat.id,
                     'from': sender,
                     'text': content,
                     'created_time': sent_at.isoformat(),
-                    'message_type': 'comment',
+                    'message_type': 'dm',
                     'notification_read': False
                 }
             })
 
-            logger.info(f"Processed Instagram message {message_id} for company {company.id}")
+            logger.info(f"Processed Instagram DM {message_id} for company {company.id}")
 
         except Exception as e:
-            logger.error(f"Error processing Instagram message: {str(e)}")
+            logger.error(f"Error processing Instagram DM: {e}")
             db.rollback()
 
     async def poll_instagram_messages(self, company_id: int) -> None:
-        """Poll Instagram messages for a specific company."""
+        """Poll Instagram **DMs** for a specific company."""
+        db = None
         try:
             db = SessionLocal()
             company = db.query(Company).filter(Company.id == company_id).first()
-            
             if not company:
                 logger.warning(f"Company {company_id} not found")
                 return
@@ -256,37 +240,47 @@ class InstagramMonitorService:
                 logger.warning(f"No Instagram credentials for company {company_id}")
                 return
 
-            # Refresh token if needed
             refreshed_credentials = await self._refresh_token_if_needed(credentials, company_id)
             if not refreshed_credentials:
                 logger.error(f"Could not refresh Instagram token for company {company_id}")
                 return
 
-            # Get messages (comments)
-            messages = await self.get_instagram_messages(refreshed_credentials, limit=10)
+            # Fetch **conversations/messages**
+            messages = await self.get_instagram_conversations(refreshed_credentials, limit=10)
 
-            # Process new messages
             for message in messages:
                 await self._process_instagram_message(message, company, db)
 
-            logger.info(f"Polled {len(messages)} Instagram messages for company {company_id}")
+            logger.info(f"Polled {len(messages)} Instagram DMs for company {company_id}")
 
         except Exception as e:
-            logger.error(f"Error polling Instagram messages for company {company_id}: {str(e)}")
+            logger.error(f"Error polling Instagram DMs for company {company_id}: {e}")
         finally:
-            db.close()
+            if db:
+                db.close()
+
+    async def poll_instagram_messages_from_companies(self) -> None:
+        """Poll Instagram DMs for all companies."""
+        db = None
+        try:
+            db = SessionLocal()
+            for company in db.query(Company).all():
+                await self.poll_instagram_messages(company.id)
+        except Exception as e:
+            logger.error(f"Error polling Instagram DMs from companies: {e}")
+        finally:
+            if db:
+                db.close()
 
     async def start_monitoring(self, company_id: int, interval_seconds: int = 60) -> None:
-        """Start monitoring Instagram messages for a company."""
-        logger.info(f"Starting Instagram monitoring for company {company_id}")
-        
+        logger.info(f"Starting Instagram DM monitoring for company {company_id}")
         while True:
             try:
                 await self.poll_instagram_messages(company_id)
-                await asyncio.sleep(interval_seconds)
             except Exception as e:
-                logger.error(f"Error in Instagram monitoring loop for company {company_id}: {str(e)}")
-                await asyncio.sleep(interval_seconds)
+                logger.error(f"Error in Instagram monitoring loop for company {company_id}: {e}")
+            await asyncio.sleep(interval_seconds)
 
-# Create a singleton instance
+
+# Singleton
 instagram_monitor_service = InstagramMonitorService()

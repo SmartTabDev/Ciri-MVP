@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.services.follow_up_service import follow_up_service
 from app.services.gmail_monitor_service import gmail_monitor_service
-
+from app.services.facebook_monitor_service import facebook_monitor_service
+from app.services.instagram_monitor_service import instagram_monitor_service
 logger = logging.getLogger(__name__)
 
 async def run_follow_up_service():
@@ -30,6 +31,43 @@ async def run_follow_up_service():
         logger.error(f"Error running follow-up service: {str(e)}")
         raise
 
+async def run_facebook_monitor_service():
+    """
+    Run the Facebook monitor service to poll for new messages for all companies.
+    This function should be called periodically (e.g., every minute).
+    """
+    print("[DEBUG] run_facebook_monitor_service called")
+    logger.info("[DEBUG] run_facebook_monitor_service called")
+    logger.info(f"[DEBUG] run_facebook_monitor_service called at {datetime.now()}")
+    logger.info(f"Starting Facebook monitor service at {datetime.now()}")
+    try:
+        db = SessionLocal()
+        try:
+            await facebook_monitor_service.poll_facebook_messages_from_companies()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[DEBUG] Error running Facebook monitor service: {e}")
+        logger.error(f"Error running Facebook monitor service: {str(e)}")
+
+async def run_instagram_monitor_service():
+    """
+    Run the Instagram monitor service to poll for new messages for all companies.
+    This function should be called periodically (e.g., every minute).
+    """
+    print("[DEBUG] run_instagram_monitor_service called")
+    logger.info("[DEBUG] run_instagram_monitor_service called")
+    logger.info(f"[DEBUG] run_instagram_monitor_service called at {datetime.now()}")
+    logger.info(f"Starting Instagram monitor service at {datetime.now()}")
+    try:
+        db = SessionLocal()
+        try:
+            await instagram_monitor_service.poll_instagram_messages_from_companies()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[DEBUG] Error running Instagram monitor service: {e}")
+        logger.error(f"Error running Instagram monitor service: {str(e)}")
 async def run_gmail_monitor_service():
     """
     Run the Gmail monitor service to poll for new emails for all companies.
@@ -79,8 +117,12 @@ async def run_email_monitor_services():
     # Run Gmail monitoring
     await run_gmail_monitor_service()
     
-    # Run Outlook monitoring
+    # # Run Outlook monitoring
     await run_outlook_monitor_service()
+    
+    await run_facebook_monitor_service()
+
+    await run_instagram_monitor_service()
 
 async def run_periodic_tasks():
     print("[DEBUG] run_periodic_tasks entered")

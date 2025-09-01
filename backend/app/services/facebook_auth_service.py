@@ -1,4 +1,4 @@
-import logging
+import logging,anyio
 import requests
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
@@ -51,10 +51,11 @@ class FacebookAuthService:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error exchanging Facebook code for token: {str(e)}")
             return None
-
+    
     async def get_facebook_user_info(self, access_token: str) -> Optional[Dict[str, Any]]:
         """
         Get Facebook user information using access token.
+        Stays async, but executes blocking `requests.get` in a worker thread.
         """
         try:
             url = "https://graph.facebook.com/me"
@@ -62,14 +63,16 @@ class FacebookAuthService:
                 "fields": "id,name,email",
                 "access_token": access_token
             }
-            
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            
-            user_info = response.json()
+
+            def _do_request():
+                r = requests.get(url, params=params, timeout=20)
+                r.raise_for_status()
+                return r.json()
+
+            user_info = await anyio.to_thread.run_sync(_do_request)
             logger.info(f"Successfully retrieved Facebook user info: {user_info.get('name')}")
             return user_info
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting Facebook user info: {str(e)}")
             return None

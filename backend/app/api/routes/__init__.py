@@ -13,4 +13,4 @@ api_router.include_router(analytics.router, prefix="/analytics", tags=["analytic
 api_router.include_router(company_context.router, prefix="/company-context", tags=["company-context"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(instagram.router, prefix="/instagram", tags=["instagram"])
-api_router.include_router(facebook.router, prefix="/facebook", tags=["facebook"])
+api_router.include_router(facebook.router, prefix="/facebook", tags=["facebook"]) 
