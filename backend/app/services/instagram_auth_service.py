@@ -202,5 +202,25 @@ class InstagramAuthService:
             logger.error(f"Error refreshing Instagram token: {str(e)}")
             return None
 
+    async def get_linked_instagram_for_page(self, page_access_token: str, page_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Given a Facebook Page, return the linked Instagram account (id, username) if present.
+        Tries instagram_business_account first, then connected_instagram_account.
+        """
+        try:
+            url = f"https://graph.facebook.com/v18.0/{page_id}"
+            params = {
+                "fields": "instagram_business_account{id,username},connected_instagram_account{id,username}",
+                "access_token": page_access_token,
+            }
+            response = requests.get(url, params=params, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            ig = data.get("instagram_business_account") or data.get("connected_instagram_account")
+            return ig
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting linked Instagram account for page {page_id}: {e}")
+            return None
+
 # Create a singleton instance
 instagram_auth_service = InstagramAuthService() 

@@ -8,6 +8,7 @@ from app.models.company import Company
 from app.models.user import User
 from app.services.facebook_auth_service import facebook_auth_service
 from app.services.facebook_monitor_service import facebook_monitor_service
+from app.services.instagram_auth_service import instagram_auth_service
 from app.api.deps import get_current_active_user
 from app.schemas.facebook import (
     FacebookAuthResponse,
@@ -90,6 +91,16 @@ async def facebook_auth_callback(
         }
         company.facebook_box_page_id = page.get('id')
         company.facebook_box_page_name = page.get('name')
+        
+        # Try to detect and store linked Instagram account
+        try:
+            ig = await instagram_auth_service.get_linked_instagram_for_page(page_access_token=page.get('access_token'), page_id=page.get('id'))
+            if ig:
+                company.instagram_account_id = ig.get('id')
+                company.instagram_username = ig.get('username')
+                company.instagram_page_id = page.get('id')
+        except Exception:
+            pass
         
         db.commit()
         

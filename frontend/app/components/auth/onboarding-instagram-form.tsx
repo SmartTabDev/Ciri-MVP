@@ -51,6 +51,11 @@ export function OnboardingInstagramForm() {
         <p className="text-sm text-center">
           Click the button below to securely connect your Instagram account. You&apos;ll be redirected to Instagram to authorize the connection.
         </p>
+        <p className="text-xs text-center text-muted-foreground">
+          Using a Facebook Business Page that is linked to your Instagram? You can skip the
+          Instagram login. Connect your Facebook Page instead, and we will automatically detect
+          the linked Instagram account for messaging.
+        </p>
         
         <div className="flex flex-col items-center gap-2">
           <Button

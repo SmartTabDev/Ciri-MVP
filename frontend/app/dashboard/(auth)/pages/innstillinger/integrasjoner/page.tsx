@@ -647,6 +647,18 @@ export default function Page() {
                               Koble opp Instagram kontoen din for automatisk
                               håndtering av kommentarer og meldinger.
                             </FormDescription>
+                            {integrationStatus.facebook && (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                Har du en Facebook bedriftside koblet til Instagram? Da kan du
+                                hoppe over egen Instagram-innlogging. Koble Facebook, så finner vi
+                                den tilknyttede Instagram-kontoen automatisk.
+                                {companyData?.instagram_username && (
+                                  <div className="mt-1">
+                                    Oppdaget Instagram: {companyData.instagram_username}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             {integrationStatus.instagram && companyData?.instagram_username && (
                               <div className="mt-2 text-xs text-green-600 dark:text-green-400">
                                 Koblet til: {companyData.instagram_username}
