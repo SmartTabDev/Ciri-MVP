@@ -98,86 +98,59 @@ class FacebookMonitorService:
                         finally:
                             db.close()
                     
-                    logger.warning(f"Could not refresh Facebook token for company {company_id}")
-                    return None
-            
             return credentials
             
         except Exception as e:
             logger.error(f"Error refreshing Facebook token for company {company_id}: {str(e)}")
-            return None
+            return credentials
 
     async def _get_facebook_messages(self, credentials: Dict[str, Any], page_id: str) -> List[Dict[str, Any]]:
-        """Get Facebook messages from a page."""
+        """Get Facebook messages for a page with performance limits."""
         try:
             page_access_token = credentials.get('page_access_token')
             if not page_access_token:
-                logger.error("No page access token found in Facebook credentials")
+                logger.warning(f"No page access token for Facebook page {page_id}")
                 return []
 
-            # Get messages from page conversations
-            messages_data = await facebook_auth_service.get_page_messages(page_id, page_access_token, limit=10)
-            if not messages_data:
-                return []
+            # Limit to 5 messages for performance
+            messages = await facebook_auth_service.get_page_messages(page_id, page_access_token, limit=5)
+            if messages and messages.get('data'):
+                return messages['data']
+            return []
 
-            messages = []
-            for conversation in messages_data.get('data', []):
-                conversation_messages = conversation.get('messages', {}).get('data', [])
-                for message in conversation_messages:
-                    messages.append({
-                        'id': message.get('id'),
-                        'text': message.get('message'),
-                        'from': message.get('from', {}).get('name'),
-                        'from_id': message.get('from', {}).get('id'),
-                        'created_time': message.get('created_time'),
-                        'conversation_id': conversation.get('id'),
-                        'type': 'message'
-                    })
-            
-            return messages
-            
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting Facebook messages: {str(e)}")
             return []
 
     async def _get_facebook_comments(self, credentials: Dict[str, Any], page_id: str) -> List[Dict[str, Any]]:
-        """Get Facebook comments from page posts."""
+        """Get Facebook comments for a page with performance limits."""
         try:
             page_access_token = credentials.get('page_access_token')
             if not page_access_token:
-                logger.error("No page access token found in Facebook credentials")
+                logger.warning(f"No page access token for Facebook page {page_id}")
                 return []
 
-            # Get comments from recent posts
-            posts_data = await facebook_auth_service.get_page_posts(page_id, page_access_token, limit=5)
-            if not posts_data:
-                return []
+            # Limit to 5 comments for performance
+            posts = await facebook_auth_service.get_page_posts(page_id, page_access_token, limit=5)
+            if posts and posts.get('data'):
+                all_comments = []
+                for post in posts['data']:
+                    if post.get('comments') and post['comments'].get('data'):
+                        # Limit to 3 comments per post for performance
+                        post_comments = post['comments']['data'][:3]
+                        for comment in post_comments:
+                            comment['post_id'] = post['id']
+                            comment['type'] = 'comment'
+                        all_comments.extend(post_comments)
+                return all_comments
+            return []
 
-            comments = []
-            for post in posts_data.get('data', []):
-                post_id = post.get('id')
-                post_comments = post.get('comments', {}).get('data', [])
-                
-                for comment in post_comments:
-                    comments.append({
-                        'id': comment.get('id'),
-                        'text': comment.get('message'),
-                        'from': comment.get('from', {}).get('name'),
-                        'from_id': comment.get('from', {}).get('id'),
-                        'created_time': comment.get('created_time'),
-                        'post_id': post_id,
-                        'post_message': post.get('message'),
-                        'type': 'comment'
-                    })
-            
-            return comments
-            
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting Facebook comments: {str(e)}")
             return []
 
     async def _process_facebook_message(self, message: Dict[str, Any], company: Company, db: Session) -> None:
-        """Process a single Facebook message and save to database."""
+        """Process a Facebook message and send AI reply if needed."""
         try:
             message_id = message.get('id')
             if not message_id:
@@ -188,23 +161,30 @@ class FacebookMonitorService:
                 Chat.message_id == message_id,
                 Chat.company_id == company.id
             ).first()
-            
             if existing_chat:
                 return
 
-            # Check if we should reply to this message
-            if not should_reply_to_facebook_message(message.get('from_id'), message.get('text', ''), settings, company.facebook_box_page_id):
+            # Determine message type and content
+            message_type = message.get('type', 'message')
+            if message_type == 'comment':
+                content = message.get('message', '')
+                sender = message.get('from', {}).get('name', 'Unknown')
+                conversation_id = f"post_{message.get('post_id', 'unknown')}"
+            else:
+                content = message.get('message', '')
+                sender = message.get('from', {}).get('name', 'Unknown')
+                conversation_id = message.get('conversation_id', 'facebook')
+
+            # Apply filtering
+            if not should_reply_to_facebook_message(sender, content, settings, company.facebook_box_page_id):
                 return
 
-            # Filter message using AI
-            sender = message.get('from', 'Unknown')
-            content = message.get('text', '')
-            
+            # AI filtering
             if not await filter_email_with_ai(sender, content):
                 logger.info(f"Facebook message filtered out by AI: {message_id}")
                 return
 
-            # Analyze message for action requirement
+            # AI action analysis
             ai_service = SimpleAIService()
             action_analysis = await ai_service.analyze_message_for_action_requirement(
                 sender=sender,
@@ -214,7 +194,7 @@ class FacebookMonitorService:
                 company_id=company.id
             )
 
-            # Create chat record
+            # Parse timestamp
             created_time = message.get('created_time')
             if created_time:
                 try:
@@ -224,13 +204,14 @@ class FacebookMonitorService:
             else:
                 sent_at = datetime.now(timezone.utc)
 
+            # Store message in database
             chat = Chat(
                 company_id=company.id,
-                channel_id=message.get('conversation_id') or message.get('post_id', 'facebook'),
+                channel_id=conversation_id,
                 message_id=message_id,
                 from_email=sender,
                 to_email=company.facebook_box_page_name or '',
-                subject=f"Facebook {message.get('type', 'message')}",
+                subject=f"Facebook {message_type.title()}",
                 body_text=content,
                 body_html=content,
                 sent_at=sent_at,
@@ -244,19 +225,36 @@ class FacebookMonitorService:
                 email_provider='facebook'
             )
 
-            
             db.add(chat)
             db.commit()
 
-            # Broadcast new message via WebSocket
-            await broadcast_new_email(company_email_ws_clients,company.id, {
+            # Check if we should send AI reply
+            if not action_analysis.get('action_required', False):
+                # Check channel auto-reply settings
+                channel_settings = channel_auto_reply_settings.get_by_channel_id(db, channel_id=conversation_id)
+                if channel_settings and not channel_settings.enable_auto_reply:
+                    logger.info(f"Auto-reply disabled for Facebook channel {conversation_id}")
+                else:
+                    # Check if we should reply (no recent outgoing message)
+                    last_outgoing = db.query(Chat).filter_by(
+                        company_id=company.id, 
+                        channel_id=conversation_id,
+                        from_email=company.facebook_box_page_name
+                    ).order_by(Chat.sent_at.desc()).first()
+                    
+                    should_reply = not last_outgoing or (last_outgoing and last_outgoing.sent_at < sent_at)
+                    if should_reply:
+                        await self._send_ai_reply_to_facebook(message, company, db, conversation_id, sender, content)
+
+            # Broadcast to frontend
+            await broadcast_new_email(company_email_ws_clients, company.id, {
                 'type': 'new_facebook_message',
                 'message': {
                     'id': chat.id,
                     'from': sender,
                     'text': content,
                     'created_time': sent_at.isoformat(),
-                    'message_type': message.get('type', 'message'),
+                    'message_type': message_type,
                     'notification_read': False
                 }
             })
@@ -267,8 +265,88 @@ class FacebookMonitorService:
             logger.error(f"Error processing Facebook message: {str(e)}")
             db.rollback()
 
+    async def _send_ai_reply_to_facebook(self, message: Dict[str, Any], company: Company, db: Session, conversation_id: str, sender: str, content: str) -> None:
+        """Send AI-generated reply to Facebook message."""
+        try:
+            ai_service = SimpleAIService()
+            
+            # Generate AI reply
+            reply_text = await ai_service.generate_email_reply(
+                sender=sender,
+                content=content,
+                company_id=company.id,
+                channel_id=conversation_id
+            )
+
+            # Send reply via Facebook API
+            page_id = company.facebook_box_page_id
+            page_access_token = None
+            
+            if company.facebook_box_credentials:
+                credentials = json.loads(company.facebook_box_credentials) if isinstance(company.facebook_box_credentials, str) else company.facebook_box_credentials
+                page_access_token = credentials.get('page_access_token')
+
+            if page_access_token and page_id:
+                # Get recipient ID from message
+                recipient_id = message.get('from', {}).get('id')
+                if recipient_id:
+                    # Send message via Facebook API
+                    result = await facebook_auth_service.send_page_message(
+                        page_id=page_id,
+                        page_access_token=page_access_token,
+                        recipient_id=recipient_id,
+                        message=reply_text
+                    )
+                    
+                    if result:
+                        # Mark original message as replied
+                        original_chat = db.query(Chat).filter(
+                            Chat.message_id == message.get('id'),
+                            Chat.company_id == company.id
+                        ).first()
+                        if original_chat:
+                            original_chat.replied = True
+                            db.add(original_chat)
+
+                        # Store reply in database
+                        reply_chat = Chat(
+                            company_id=company.id,
+                            channel_id=conversation_id,
+                            message_id=f"reply-{message.get('id')}",
+                            from_email=company.facebook_box_page_name or '',
+                            to_email=sender,
+                            subject="Facebook Reply",
+                            body_text=reply_text,
+                            body_html=reply_text,
+                            sent_at=datetime.now(timezone.utc),
+                            is_read=True,
+                            notification_read=False,
+                            replied=False,
+                            action_required=False,
+                            action_reason='',
+                            action_type='',
+                            urgency='',
+                            email_provider='facebook'
+                        )
+                        db.add(reply_chat)
+                        db.commit()
+
+                        # Store in channel context
+                        channel_context_service.store_message_in_context(db, reply_chat)
+                        
+                        logger.info(f"Sent AI reply to Facebook message {message.get('id')}")
+                    else:
+                        logger.error(f"Failed to send Facebook reply to message {message.get('id')}")
+                else:
+                    logger.warning(f"No recipient ID found for Facebook message {message.get('id')}")
+            else:
+                logger.warning(f"No Facebook page access token for company {company.id}")
+
+        except Exception as e:
+            logger.error(f"Error sending AI reply to Facebook: {str(e)}")
+
     async def poll_facebook_messages(self, company_id: int) -> None:
-        """Poll Facebook messages for a specific company."""
+        """Poll Facebook messages for a specific company with performance limits."""
         try:
             db = SessionLocal()
             company = db.query(Company).filter(Company.id == company_id).first()
@@ -294,7 +372,7 @@ class FacebookMonitorService:
                 logger.warning(f"No Facebook page ID for company {company_id}")
                 return
 
-            # Get messages and comments
+            # Get messages and comments with limits
             messages = await self._get_facebook_messages(refreshed_credentials, page_id)
             comments = await self._get_facebook_comments(refreshed_credentials, page_id)
             
@@ -312,7 +390,7 @@ class FacebookMonitorService:
             db.close()
 
     async def poll_facebook_messages_from_companies(self) -> None:
-        """Poll Facebook messages for a specific company."""
+        """Poll Facebook messages for all companies with performance limits."""
         try:
             db = SessionLocal()
             companies = db.query(Company).filter(Company.facebook_box_credentials.isnot(None)).all()
@@ -322,21 +400,21 @@ class FacebookMonitorService:
                 credentials = self._get_credentials(company, db)
                 if not credentials:
                     logger.warning(f"No Facebook credentials for company {company_id}")
-                    return
+                    continue
 
                 # Refresh token if needed
                 refreshed_credentials = await self._refresh_token_if_needed(credentials, company_id)
                 if not refreshed_credentials:
                     logger.error(f"Could not refresh Facebook token for company {company_id}")
-                    return
+                    continue
 
                 # Get Facebook page ID
                 page_id = company.facebook_box_page_id
                 if not page_id:
                     logger.warning(f"No Facebook page ID for company {company_id}")
-                    return
+                    continue
 
-                # Get messages and comments
+                # Get messages and comments with limits
                 messages = await self._get_facebook_messages(refreshed_credentials, page_id)
                 comments = await self._get_facebook_comments(refreshed_credentials, page_id)
                 
@@ -360,10 +438,9 @@ class FacebookMonitorService:
         while True:
             try:
                 await self.poll_facebook_messages(company_id)
-                await asyncio.sleep(interval_seconds)
             except Exception as e:
                 logger.error(f"Error in Facebook monitoring loop for company {company_id}: {str(e)}")
-                await asyncio.sleep(interval_seconds)
+            await asyncio.sleep(interval_seconds)
 
-# Create a singleton instance
+# Singleton instance
 facebook_monitor_service = FacebookMonitorService()

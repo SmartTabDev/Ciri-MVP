@@ -15,7 +15,10 @@ from app.core.ws_clients import company_email_ws_clients
 from app.core.broadcast import broadcast_new_email
 from app.services.ai_service import SimpleAIService, filter_email_with_ai
 from app.models.chat import Chat
-from app.services.instagram_auth_service import instagram_auth_service 
+from app.services.instagram_auth_service import instagram_auth_service
+from app.services.facebook_auth_service import facebook_auth_service
+from app.services.channel_context_service import channel_context_service
+from app.crud.crud_channel_auto_reply_settings import channel_auto_reply_settings 
 logger = logging.getLogger(__name__)
 
 GRAPH = "https://graph.instagram.com/v23.0"
@@ -96,10 +99,10 @@ class InstagramMonitorService:
 
         try:
           
-            # 2) List conversations
+            # 2) List conversations with performance limits
             conv_res = requests.get(f"{GRAPH}/me/conversations", params={
                 "access_token": access_token,
-                "limit": max(1, min(50, limit))
+                "limit": max(1, min(5, limit))  # Limit to 5 conversations for performance
             }, timeout=20)
             conv_res.raise_for_status()
             conversations = conv_res.json().get("data", [])
@@ -115,7 +118,7 @@ class InstagramMonitorService:
                 # You can use the Graph Conversation node to pull messages
                 # Either /{conversation_id}/messages or ?fields=messages{...}
                 detail = requests.get(f"{GRAPH}/{conv_id}", params={
-                    "fields": "updated_time,participants,messages.limit(50){id,from,to,created_time,message,attachments}",
+                    "fields": "updated_time,participants,messages.limit(3){id,from,to,created_time,message,attachments}",  # Limit to 3 messages per conversation
                     "access_token": access_token
                 }, timeout=20)
                 if not detail.ok:
@@ -207,6 +210,24 @@ class InstagramMonitorService:
             db.add(chat)
             db.commit()
 
+            # Check if we should send AI reply
+            if not action_analysis.get('action_required', False):
+                # Check channel auto-reply settings
+                channel_settings = channel_auto_reply_settings.get_by_channel_id(db, channel_id=message.get('conversation_id', 'instagram'))
+                if channel_settings and not channel_settings.enable_auto_reply:
+                    logger.info(f"Auto-reply disabled for Instagram channel {message.get('conversation_id', 'instagram')}")
+                else:
+                    # Check if we should reply (no recent outgoing message)
+                    last_outgoing = db.query(Chat).filter_by(
+                        company_id=company.id, 
+                        channel_id=message.get('conversation_id', 'instagram'),
+                        from_email=company.instagram_username
+                    ).order_by(Chat.sent_at.desc()).first()
+                    
+                    should_reply = not last_outgoing or (last_outgoing and last_outgoing.sent_at < sent_at)
+                    if should_reply:
+                        await self._send_ai_reply_to_instagram(message, company, db, sender, content)
+
             await broadcast_new_email(company_email_ws_clients, company.id, {
                 'type': 'new_instagram_message',
                 'message': {
@@ -224,6 +245,101 @@ class InstagramMonitorService:
         except Exception as e:
             logger.error(f"Error processing Instagram DM: {e}")
             db.rollback()
+
+    async def _send_ai_reply_to_instagram(self, message: Dict[str, Any], company: Company, db: Session, sender: str, content: str) -> None:
+        """Send AI-generated reply to Instagram message.
+        Attempts to send via the connected Facebook Page's Send API (Instagram Messaging).
+        Falls back to storing the AI reply if sending fails or configuration is missing."""
+        try:
+            ai_service = SimpleAIService()
+            
+            # Generate AI reply
+            reply_text = await ai_service.generate_email_reply(
+                sender=sender,
+                content=content,
+                company_id=company.id,
+                channel_id=message.get('conversation_id', 'instagram')
+            )
+
+            # Attempt to send via the connected Facebook Page (Instagram Messaging Send API)
+            sent_successfully = False
+            sent_message_id = None
+            try:
+                # Prefer Facebook page ID configured during FB auth; fallback to instagram_page_id if present
+                page_id = getattr(company, 'facebook_box_page_id', None) or getattr(company, 'instagram_page_id', None)
+                page_access_token = None
+                if getattr(company, 'facebook_box_credentials', None):
+                    fb_creds = company.facebook_box_credentials
+                    if isinstance(fb_creds, str):
+                        import json as _json
+                        try:
+                            fb_creds = _json.loads(fb_creds)
+                        except Exception:
+                            fb_creds = None
+                    if isinstance(fb_creds, dict):
+                        page_access_token = fb_creds.get('page_access_token')
+
+                # Recipient IG Scoped User ID extracted when fetching messages
+                recipient_id = message.get('from_id') or (message.get('from') or {}).get('id')
+
+                if page_id and page_access_token and recipient_id:
+                    result = await facebook_auth_service.send_page_message(
+                        page_id=page_id,
+                        page_access_token=page_access_token,
+                        recipient_id=recipient_id,
+                        message=reply_text
+                    )
+                    if result:
+                        sent_successfully = True
+                        sent_message_id = (result.get('message_id') if isinstance(result, dict) else None) or f"reply-{message.get('id')}"
+                        logger.info(f"Instagram reply sent via Page API to recipient {recipient_id}")
+                else:
+                    logger.warning("Instagram send skipped: missing page_id, page_access_token, or recipient_id")
+            except Exception as send_err:
+                logger.error(f"Error sending Instagram reply via Page API: {send_err}")
+
+            # Mark original message as replied
+            original_chat = db.query(Chat).filter(
+                Chat.message_id == message.get('id'),
+                Chat.company_id == company.id
+            ).first()
+            if original_chat:
+                original_chat.replied = True
+                db.add(original_chat)
+
+            # Store reply in database (sent or prepared)
+            reply_chat = Chat(
+                company_id=company.id,
+                channel_id=message.get('conversation_id', 'instagram'),
+                message_id=sent_message_id or f"ai-reply-{message.get('id')}",
+                from_email=company.instagram_username or '',
+                to_email=sender,
+                subject="Instagram AI Reply",
+                body_text=reply_text,
+                body_html=reply_text,
+                sent_at=datetime.now(timezone.utc),
+                is_read=True,
+                notification_read=False,
+                replied=False,
+                action_required=False,
+                action_reason='',
+                action_type='',
+                urgency='',
+                email_provider='instagram'
+            )
+            db.add(reply_chat)
+            db.commit()
+
+            # Store in channel context
+            channel_context_service.store_message_in_context(db, reply_chat)
+            
+            if sent_successfully:
+                logger.info(f"Sent AI reply for Instagram message {message.get('id')}")
+            else:
+                logger.info(f"Prepared AI reply for Instagram message {message.get('id')} (not sent automatically)")
+
+        except Exception as e:
+            logger.error(f"Error generating AI reply for Instagram: {str(e)}")
 
     async def poll_instagram_messages(self, company_id: int) -> None:
         """Poll Instagram **DMs** for a specific company."""
@@ -245,8 +361,8 @@ class InstagramMonitorService:
                 logger.error(f"Could not refresh Instagram token for company {company_id}")
                 return
 
-            # Fetch **conversations/messages**
-            messages = await self.get_instagram_conversations(refreshed_credentials, limit=10)
+            # Fetch **conversations/messages** with performance limits
+            messages = await self.get_instagram_conversations(refreshed_credentials, limit=5)
 
             for message in messages:
                 await self._process_instagram_message(message, company, db)
