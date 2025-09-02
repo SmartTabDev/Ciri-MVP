@@ -29,7 +29,6 @@ async def get_facebook_auth_url(
     """
     try:
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
-        print(company.id)
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
         

@@ -100,7 +100,7 @@ class InstagramMonitorService:
             conv_res = requests.get(f"{GRAPH}/me/conversations", params={
                 "access_token": access_token,
                 "limit": max(1, min(50, limit))
-            })
+            }, timeout=20)
             conv_res.raise_for_status()
             conversations = conv_res.json().get("data", [])
 
@@ -117,7 +117,7 @@ class InstagramMonitorService:
                 detail = requests.get(f"{GRAPH}/{conv_id}", params={
                     "fields": "updated_time,participants,messages.limit(50){id,from,to,created_time,message,attachments}",
                     "access_token": access_token
-                })
+                }, timeout=20)
                 if not detail.ok:
                     logger.warning("Failed to fetch conversation %s: %s", conv_id, detail.text)
                     continue

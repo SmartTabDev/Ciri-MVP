@@ -48,3 +48,16 @@ frontend/.env.production
 
 backend/.env
 backend/.env.production
+
+# Log files
+*.log
+backend/app.log
+backend/logs/
+
+# Test files
+backend/test.py
+backend/test_*.py
+backend/*_test.py
+
+# Temporary files
+backend/app/api/routes/* copy.py

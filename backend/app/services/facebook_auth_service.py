@@ -41,7 +41,7 @@ class FacebookAuthService:
                 "code": code
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             token_data = response.json()
@@ -88,7 +88,7 @@ class FacebookAuthService:
                 "fields": "id,name,access_token,category,fan_count"
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             pages_data = response.json()
@@ -111,7 +111,7 @@ class FacebookAuthService:
                 "limit": limit
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             if response.status_code == 200:
                 conversations_data = response.json()
                 logger.info(f"Retrieved {len(conversations_data.get('data', []))} conversations")
@@ -136,7 +136,7 @@ class FacebookAuthService:
                 "limit": limit
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             posts_data = response.json()
@@ -160,7 +160,7 @@ class FacebookAuthService:
                 "fb_exchange_token": access_token
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             token_data = response.json()
@@ -183,7 +183,7 @@ class FacebookAuthService:
                 "access_token": page_access_token
             }
             
-            response = requests.post(url, json=data)
+            response = requests.post(url, json=data, timeout=20)
             if response.status_code == 200:
                 result = response.json()
                 logger.info(f"Successfully sent Facebook message to {recipient_id}")

@@ -34,7 +34,6 @@ class InstagramAuthService:
             "force_reauth" : True,
             "platform_app_id": self.instagram_app_id
         }
-        print(f"{base}?{urlencode(params)}")
         return f"{base}?{urlencode(params)}"
 
     async def exchange_instagram_code_for_token(self, code: str) -> Optional[Dict[str, Any]]:
@@ -126,7 +125,7 @@ class InstagramAuthService:
                 "access_token": access_token
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             user_info = response.json()
@@ -148,7 +147,7 @@ class InstagramAuthService:
                 "access_token": access_token
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             user_info = response.json()
@@ -170,7 +169,7 @@ class InstagramAuthService:
                 "access_token": access_token
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             user_accounts_info = response.json()
@@ -192,7 +191,7 @@ class InstagramAuthService:
                 "access_token": refresh_token
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             token_data = response.json()
