@@ -195,27 +195,7 @@ class FacebookMonitorService:
             message_id = message.get('id')
             if not message_id:
                 return
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print(f"[DEBUG] Processing Facebook message: {message}")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message")
-            print("singel message") 
+        
             # Check if message already exists
             existing_chat = db.query(Chat).filter(
                 Chat.message_id == message_id,
