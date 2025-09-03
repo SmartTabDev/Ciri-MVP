@@ -43,23 +43,37 @@ export function ChatFooter() {
   const recipientEmail = selectedChat?.user?.email;
   const subject = selectedChat?.subject;
   const emailProvider = selectedChat?.email_provider || 'gmail';
+  const isMeta = emailProvider === 'facebook' || emailProvider === 'instagram';
+  const recipientId = selectedChat?.user?.email || (selectedChat as any)?.user?.id || selectedChatId; // fallback for meta
 
   console.log(selectedChat)
 
   const handleSend = async () => {
-    if (!message.trim() || !recipientEmail || !subject) return;
+    if (!message.trim()) return;
+    if (!isMeta && (!recipientEmail || !subject)) return;
+    if (isMeta && !recipientId) return;
     setLoading(true);
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+      const url = isMeta
+        ? (emailProvider === 'facebook' ? "/v1/ai/send-facebook" : "/v1/ai/send-instagram")
+        : "/v1/ai/send-email";
+      const payload = isMeta
+        ? {
+            recipient_id: recipientId,
+            message: message,
+            thread_id: selectedChatId,
+          }
+        : {
+            to: recipientEmail,
+            subject: subject,
+            body: message,
+            thread_id: selectedChatId,
+            original_message_id: selectedChat?.messages?.[(selectedChat?.messages?.length ?? 1) - 1]?.id,
+          };
       const response = await axios.post(
-        getApiUrl() + "/v1/ai/send-email",
-        {
-          to: recipientEmail,
-          subject: subject,
-          body: message,
-          thread_id: selectedChatId, // Add thread_id to the payload
-          original_message_id: selectedChat?.messages?.[(selectedChat?.messages?.length ?? 1) - 1]?.id
-        },
+        getApiUrl() + url,
+        payload,
         {
           headers: {
             "Content-Type": "application/json",
@@ -72,8 +86,8 @@ export function ChatFooter() {
       } else {
         // Create a new message object for the sent email
         const sentMessage = {
-          id: response.data?.message_id || `sent-${Date.now()}`, // Use the actual message ID from response
-          from: user?.company_gmail_box_email || user?.email || "Unknown",
+          id: response.data?.message_id || `sent-${Date.now()}`,
+          from: isMeta ? (emailProvider === 'facebook' ? 'Facebook Page' : 'Instagram') : (user?.company_gmail_box_email || user?.email || 'Unknown'),
           date: new Date().toISOString(),
           content: message,
           read: true, // Mark as read since we sent it
@@ -94,7 +108,8 @@ export function ChatFooter() {
   };
 
   const handleSendClick = () => {
-    if (!message.trim() || !recipientEmail || !subject) return;
+    if (!message.trim()) return;
+    if (!isMeta && (!recipientEmail || !subject)) return;
     
     // Check if auto-reply is already disabled for this channel
     const selectedChat = chats.find((c) => c.id === selectedChatId);

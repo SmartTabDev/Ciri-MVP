@@ -16,10 +16,12 @@ from app.schemas.ai import AIRequest, AIResponse, InputType, AudioFormat, VoiceT
 from app.services.ai_service import SimpleAIService
 from app.crud.crud_company import company
 from app.crud.crud_ai_agent_settings import ai_agent_settings
-from app.schemas.email import SendEmailRequest
+from app.schemas.email import SendEmailRequest, SendFacebookMessageRequest, SendInstagramMessageRequest
 from app.core.email import send_plain_email
 from app.services.channel_context_service import channel_context_service
 from app.util import extract_email_address
+from app.services.facebook_auth_service import facebook_auth_service
+from app.models.company import Company
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -311,3 +313,136 @@ async def send_email_api(
     except Exception as e:
         logger.error(f"Failed to send email: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+
+@router.post("/send-facebook", status_code=200)
+async def send_facebook_message_api(
+    request: SendFacebookMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Send a message via the connected Facebook Page (Messenger/IG Messaging).
+    """
+    try:
+        if not current_user.company_id:
+            raise HTTPException(status_code=400, detail="User is not associated with any company")
+        db_company: Company = db.query(Company).filter(Company.id == current_user.company_id).first()
+        if not db_company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        # Resolve page token
+        creds = getattr(db_company, 'facebook_box_credentials', None)
+        if isinstance(creds, str):
+            import json
+            creds = json.loads(creds)
+        page_access_token = creds.get('page_access_token') if isinstance(creds, dict) else None
+        page_id = getattr(db_company, 'facebook_box_page_id', None)
+        if not page_access_token or not page_id:
+            raise HTTPException(status_code=400, detail="Facebook Page not connected")
+
+        # Send message
+        result = await facebook_auth_service.send_page_message(
+            page_id=page_id,
+            page_access_token=page_access_token,
+            recipient_id=request.recipient_id,
+            message=request.message
+        )
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to send Facebook message")
+
+        # Store in Chat
+        chat = Chat(
+            company_id=current_user.company_id,
+            channel_id=request.thread_id or f"facebook-{request.recipient_id}",
+            message_id=(result.get('message_id') if isinstance(result, dict) else None) or f"fb-{int(time.time())}",
+            from_email=db_company.facebook_box_page_name or 'facebook',
+            to_email=request.recipient_id,
+            subject="Facebook Message",
+            body_text=request.message,
+            body_html=request.message,
+            sent_at=datetime.now(timezone.utc),
+            is_read=True,
+            action_required=False,
+            action_reason='',
+            action_type='',
+            urgency='',
+            email_provider='facebook'
+        )
+        db.add(chat)
+        db.commit()
+
+        channel_context_service.store_message_in_context(db, chat)
+
+        return {"message": "Facebook message sent", "chat_id": chat.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to send Facebook message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send Facebook message: {e}")
+
+
+@router.post("/send-instagram", status_code=200)
+async def send_instagram_message_api(
+    request: SendInstagramMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Send an Instagram DM via the connected Facebook Page (Instagram Messaging API).
+    """
+    try:
+        if not current_user.company_id:
+            raise HTTPException(status_code=400, detail="User is not associated with any company")
+        db_company: Company = db.query(Company).filter(Company.id == current_user.company_id).first()
+        if not db_company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        creds = getattr(db_company, 'facebook_box_credentials', None)
+        if isinstance(creds, str):
+            import json
+            creds = json.loads(creds)
+        page_access_token = creds.get('page_access_token') if isinstance(creds, dict) else None
+        page_id = getattr(db_company, 'facebook_box_page_id', None) or getattr(db_company, 'instagram_page_id', None)
+        if not page_access_token or not page_id:
+            raise HTTPException(status_code=400, detail="Facebook Page not connected for Instagram messaging")
+
+        # Send via page message API
+        result = await facebook_auth_service.send_page_message(
+            page_id=page_id,
+            page_access_token=page_access_token,
+            recipient_id=request.recipient_id,
+            message=request.message
+        )
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to send Instagram message")
+
+        # Store in Chat
+        chat = Chat(
+            company_id=current_user.company_id,
+            channel_id=request.thread_id or f"instagram-{request.recipient_id}",
+            message_id=(result.get('message_id') if isinstance(result, dict) else None) or f"ig-{int(time.time())}",
+            from_email=db_company.instagram_username or 'instagram',
+            to_email=request.recipient_id,
+            subject="Instagram Message",
+            body_text=request.message,
+            body_html=request.message,
+            sent_at=datetime.now(timezone.utc),
+            is_read=True,
+            action_required=False,
+            action_reason='',
+            action_type='',
+            urgency='',
+            email_provider='instagram'
+        )
+        db.add(chat)
+        db.commit()
+
+        channel_context_service.store_message_in_context(db, chat)
+
+        return {"message": "Instagram message sent", "chat_id": chat.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to send Instagram message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send Instagram message: {e}")

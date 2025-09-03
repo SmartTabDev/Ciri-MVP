@@ -33,3 +33,16 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     message: str
+
+
+# Social messaging requests
+class SendFacebookMessageRequest(BaseModel):
+    recipient_id: str  # PSID or user ID in Messenger/Instagram scope
+    message: str
+    thread_id: Optional[str] = None
+
+
+class SendInstagramMessageRequest(BaseModel):
+    recipient_id: str  # IG scoped user id
+    message: str
+    thread_id: Optional[str] = None
