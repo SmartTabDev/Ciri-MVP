@@ -99,30 +99,57 @@ class FacebookAuthService:
             logger.error(f"Error getting Facebook pages: {str(e)}")
             return None
 
+    async def get_conversation_messages(self, conversation_id: str, page_access_token: str, after: str = None, limit: int = 25) -> Optional[Dict[str, Any]]:
+        """
+        Page through a single conversation's messages.
+        """
+        try:
+            url = f"https://graph.facebook.com/v18.0/{conversation_id}/messages"
+            params = {
+                "access_token": page_access_token,
+                "fields": "id,message,from,created_time",
+                "limit": limit
+            }
+            if after:
+                params["after"] = after
+
+            response = requests.get(url, params=params, timeout=20)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Could not page conversation {conversation_id}: {response.status_code} - {response.text}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error paging conversation {conversation_id}: {str(e)}")
+            return None
+
     async def get_page_messages(self, page_id: str, page_access_token: str, limit: int = 10) -> Optional[Dict[str, Any]]:
         """
-        Get messages from a Facebook page (requires pages_messaging permission).
+        Get conversations for a Facebook page (requires pages_messaging).
+        Returns conversations with a first page of nested messages.
         """
         try:
             url = f"https://graph.facebook.com/v18.0/{page_id}/conversations"
             params = {
                 "access_token": page_access_token,
-                "fields": "id,participants,messages{id,message,from,created_time}",
+                "fields": "id,participants,messages{id,message,from,created_time}",  # first page of messages
                 "limit": limit
             }
-            
             response = requests.get(url, params=params, timeout=20)
             if response.status_code == 200:
                 conversations_data = response.json()
                 logger.info(f"Retrieved {len(conversations_data.get('data', []))} conversations")
+                # logger.debug(f"Conversations payload: {conversations_data}")  # optional, noisy
                 return conversations_data
             else:
-                logger.warning(f"Could not retrieve page messages: {response.status_code}")
+                logger.warning(f"Could not retrieve page messages: {response.status_code} - {response.text}")
                 return None
-                
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting Facebook page messages: {str(e)}")
             return None
+
 
     async def get_page_posts(self, page_id: str, page_access_token: str, limit: int = 10) -> Optional[Dict[str, Any]]:
         """

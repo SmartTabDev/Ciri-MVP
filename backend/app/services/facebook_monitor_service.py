@@ -105,23 +105,63 @@ class FacebookMonitorService:
             return credentials
 
     async def _get_facebook_messages(self, credentials: Dict[str, Any], page_id: str) -> List[Dict[str, Any]]:
-        """Get Facebook messages for a page with performance limits."""
+        """
+        Fetch conversations from a page and FLATTEN to message-level dicts.
+        Each returned dict contains:
+        - id, message, from, created_time (original fields)
+        - conversation_id (thread id)
+        - participants (list of {id, name, email} for the thread)
+        """
         try:
             page_access_token = credentials.get('page_access_token')
             if not page_access_token:
                 logger.warning(f"No page access token for Facebook page {page_id}")
                 return []
 
-            # Limit to 5 messages for performance
-            messages = await facebook_auth_service.get_page_messages(page_id, page_access_token, limit=5)
-            if messages and messages.get('data'):
-                return messages['data']
-            return []
+            # Keep the conversations page small for performance; you can bump if desired.
+            conversations = await facebook_auth_service.get_page_messages(
+                page_id, page_access_token, limit=5
+            )
+            if not conversations or not conversations.get('data'):
+                return []
+
+            flattened: List[Dict[str, Any]] = []
+            for conv in conversations.get('data', []):
+                conv_id = conv.get('id')
+                participants = (conv.get('participants') or {}).get('data', []) or []
+
+                # Messages included in the conversation payload (first page)
+                msgs = (conv.get('messages') or {}).get('data', []) or []
+                for m in msgs:
+                    # Attach context so downstream code knows the thread + participants
+                    enriched = {
+                        **m,
+                        "conversation_id": conv_id,
+                        "participants": participants,
+                    }
+                    flattened.append(enriched)
+
+                # If you want to page deeper within EACH conversation, uncomment this block:
+                # after = ((conv.get('messages') or {}).get('paging') or {}).get('cursors', {}).get('after')
+                # pulls = 1
+                # MAX_PULLS_PER_CONV = 2  # keep it light; tune as needed
+                # while after and pulls <= MAX_PULLS_PER_CONV:
+                #     more = await facebook_auth_service.get_conversation_messages(conv_id, page_access_token, after=after, limit=25)
+                #     data = (more or {}).get('data', [])
+                #     for m in data:
+                #         enriched = {**m, "conversation_id": conv_id, "participants": participants}
+                #         flattened.append(enriched)
+                #     after = ((more or {}).get('paging') or {}).get('cursors', {}).get('after')
+                #     pulls += 1
+
+            logger.info(f"Flattened {len(flattened)} messages from {len(conversations.get('data', []))} conversations")
+            return flattened
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting Facebook messages: {str(e)}")
             return []
 
+    
     async def _get_facebook_comments(self, credentials: Dict[str, Any], page_id: str) -> List[Dict[str, Any]]:
         """Get Facebook comments for a page with performance limits."""
         try:
@@ -155,7 +195,27 @@ class FacebookMonitorService:
             message_id = message.get('id')
             if not message_id:
                 return
-
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print(f"[DEBUG] Processing Facebook message: {message}")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message")
+            print("singel message") 
             # Check if message already exists
             existing_chat = db.query(Chat).filter(
                 Chat.message_id == message_id,
@@ -163,7 +223,7 @@ class FacebookMonitorService:
             ).first()
             if existing_chat:
                 return
-
+            
             # Determine message type and content
             message_type = message.get('type', 'message')
             if message_type == 'comment':
@@ -347,10 +407,10 @@ class FacebookMonitorService:
 
     async def poll_facebook_messages(self, company_id: int) -> None:
         """Poll Facebook messages for a specific company with performance limits."""
+        db = None
         try:
             db = SessionLocal()
             company = db.query(Company).filter(Company.id == company_id).first()
-            
             if not company:
                 logger.warning(f"Company {company_id} not found")
                 return
@@ -372,22 +432,24 @@ class FacebookMonitorService:
                 logger.warning(f"No Facebook page ID for company {company_id}")
                 return
 
-            # Get messages and comments with limits
-            messages = await self._get_facebook_messages(refreshed_credentials, page_id)
+            # Get messages (flattened from conversations) and comments with limits
+            messages = await self._get_facebook_messages(refreshed_credentials, page_id)  # flattened
             comments = await self._get_facebook_comments(refreshed_credentials, page_id)
-            
-            all_messages = messages + comments
 
-            # Process new messages
-            for message in all_messages:
-                await self._process_facebook_message(message, company, db)
+            all_items = messages + comments
 
-            logger.info(f"Polled {len(all_messages)} Facebook messages for company {company_id}")
+            # Process new items
+            for item in all_items:
+                await self._process_facebook_message(item, company, db)
+
+            logger.info(f"Polled {len(all_items)} Facebook items for company {company_id}")
 
         except Exception as e:
             logger.error(f"Error polling Facebook messages for company {company_id}: {str(e)}")
         finally:
-            db.close()
+            if db is not None:
+                db.close()
+
 
     async def poll_facebook_messages_from_companies(self) -> None:
         """Poll Facebook messages for all companies with performance limits."""
